@@ -4,55 +4,70 @@
 // ml5 bodyPose (MoveNet) shows which body parts the AI can still see.
 
 // ---------- Tunable settings ----------
-const HIGH = 0.70;            // score at or above this -> DETECTED (red)
-const LOW = 0.30;             // score below this -> UNDETECTED (green)
-const MARGIN = 0.05;          // hysteresis: score must move back this far to leave a state
-const SMOOTHING = 0.5;        // 0..1, higher = faster score changes
-const KP_MIN = 0.3;           // keypoint confidence that counts as "seen"
-const POSE_EVERY = 2;         // run bodyPose once every N COCO detections
-const DETECT_GAP = 30;        // ms pause between detections so drawing stays smooth
-const SHOW_SKELETON = true;   // draw the bodyPose skeleton over the video
+const HIGH = 0.7; // score at or above this -> DETECTED (red)
+const LOW = 0.3; // score below this -> UNDETECTED (green)
+const MARGIN = 0.05; // hysteresis: score must move back this far to leave a state
+const SMOOTHING = 0.5; // 0..1, higher = faster score changes
+const KP_MIN = 0.3; // keypoint confidence that counts as "seen"
+const POSE_EVERY = 2; // run bodyPose once every N COCO detections
+const DETECT_GAP = 30; // ms pause between detections so drawing stays smooth
+const SHOW_SKELETON = true; // draw the bodyPose skeleton over the video
 
 const PARTS = [
-  { label: "Face", names: ["nose", "left_eye", "right_eye", "left_ear", "right_ear"] },
+  {
+    label: "Face",
+    names: ["nose", "left_eye", "right_eye", "left_ear", "right_ear"],
+  },
   { label: "Hands", names: ["left_wrist", "right_wrist"] },
-  { label: "Body", names: ["left_shoulder", "right_shoulder", "left_hip", "right_hip"] },
-  { label: "Legs", names: ["left_knee", "right_knee", "left_ankle", "right_ankle"] },
+  {
+    label: "Body",
+    names: ["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
+  },
+  {
+    label: "Legs",
+    names: ["left_knee", "right_knee", "left_ankle", "right_ankle"],
+  },
 ];
 
 const STATES = {
-  LOADING:    { label: "LOADING MODELS", accent: [150, 150, 160] },
-  DETECTED:   { label: "HUMAN DETECTED", accent: [255, 59, 59] },    // #ff3b3b
-  UNSURE:     { label: "UNSURE",         accent: [255, 176, 32] },   // #ffb020
-  UNDETECTED: { label: "UNDETECTED",     accent: [47, 227, 140] },   // #2fe38c
+  LOADING: { label: "LOADING MODELS", accent: [150, 150, 160] },
+  DETECTED: { label: "HUMAN DETECTED", accent: [255, 59, 59] }, // #ff3b3b
+  UNSURE: { label: "UNSURE", accent: [255, 176, 32] }, // #ffb020
+  UNDETECTED: { label: "UNDETECTED", accent: [47, 227, 140] }, // #2fe38c
 };
 
 // ---------- Visual style ----------
-const BG = [11, 11, 13];      // #0b0b0d
+const BG = [11, 11, 13]; // #0b0b0d
 const HEAD = '"Space Grotesk", sans-serif';
 const MONO = '"JetBrains Mono", monospace';
-const FADE_MS = 100;          // colour fade time constant (~300 ms to settle)
-const SCAN_MS = 5000;         // time for the scan line to cross the video
+const FADE_MS = 100; // colour fade time constant (~300 ms to settle)
+const SCAN_MS = 5000; // time for the scan line to cross the video
 
 const SKELETON = [
   ["left_shoulder", "right_shoulder"],
-  ["left_shoulder", "left_elbow"], ["left_elbow", "left_wrist"],
-  ["right_shoulder", "right_elbow"], ["right_elbow", "right_wrist"],
-  ["left_shoulder", "left_hip"], ["right_shoulder", "right_hip"], ["left_hip", "right_hip"],
-  ["left_hip", "left_knee"], ["left_knee", "left_ankle"],
-  ["right_hip", "right_knee"], ["right_knee", "right_ankle"],
+  ["left_shoulder", "left_elbow"],
+  ["left_elbow", "left_wrist"],
+  ["right_shoulder", "right_elbow"],
+  ["right_elbow", "right_wrist"],
+  ["left_shoulder", "left_hip"],
+  ["right_shoulder", "right_hip"],
+  ["left_hip", "right_hip"],
+  ["left_hip", "left_knee"],
+  ["left_knee", "left_ankle"],
+  ["right_hip", "right_knee"],
+  ["right_knee", "right_ankle"],
 ];
 
 // ---------- State ----------
 let video, cocoModel, bodyPose;
-let people = [];              // COCO "person" boxes {x, y, w, h, score} in video pixels
-let keypoints = [];           // MoveNet keypoints {x, y, confidence, name} in video pixels
-let topScore = 0;             // smoothed best person score
+let people = []; // COCO "person" boxes {x, y, w, h, score} in video pixels
+let keypoints = []; // MoveNet keypoints {x, y, confidence, name} in video pixels
+let topScore = 0; // smoothed best person score
 let state = "LOADING";
 let tick = 0;
-let accent = STATES.LOADING.accent.slice();   // current (fading) state colour
-let shownScore = 0;           // eased score for the confidence bar
-let view;                     // where the video sits on screen: {x, y, w, h, s}
+let accent = STATES.LOADING.accent.slice(); // current (fading) state colour
+let shownScore = 0; // eased score for the confidence bar
+let view; // where the video sits on screen: {x, y, w, h, s}
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
@@ -64,21 +79,35 @@ function setup() {
   });
 
   // Canvas text doesn't trigger web font downloads on its own
-  for (const f of [`300 20px ${HEAD}`, `500 20px ${HEAD}`, `300 20px ${MONO}`, `400 20px ${MONO}`, `500 20px ${MONO}`]) {
+  for (const f of [
+    `300 20px ${HEAD}`,
+    `500 20px ${HEAD}`,
+    `300 20px ${MONO}`,
+    `400 20px ${MONO}`,
+    `500 20px ${MONO}`,
+  ]) {
     document.fonts.load(f);
   }
 
   // WebGL is the steadiest backend for COCO-SSD (on WebGPU its box filtering blocks the page)
-  tf.setBackend("webgl").then(() => Promise.all([
-    cocoSsd.load(),
-    new Promise((resolve) => {
-      bodyPose = ml5.bodyPose("MoveNet", { modelType: "SINGLEPOSE_LIGHTNING" }, resolve);
-    }),
-  ])).then(([m]) => {
-    cocoModel = m;
-    state = "UNDETECTED";
-    detectLoop();
-  });
+  tf.setBackend("webgl")
+    .then(() =>
+      Promise.all([
+        cocoSsd.load(),
+        new Promise((resolve) => {
+          bodyPose = ml5.bodyPose(
+            "MoveNet",
+            { modelType: "SINGLEPOSE_LIGHTNING" },
+            resolve,
+          );
+        }),
+      ]),
+    )
+    .then(([m]) => {
+      cocoModel = m;
+      state = "UNDETECTED";
+      detectLoop();
+    });
 }
 
 // One loop runs both models in turn so they never compete for the GPU
@@ -88,7 +117,13 @@ async function detectLoop() {
       const preds = await cocoModel.detect(video.elt, 20, 0.05);
       people = preds
         .filter((p) => p.class === "person")
-        .map((p) => ({ x: p.bbox[0], y: p.bbox[1], w: p.bbox[2], h: p.bbox[3], score: p.score }));
+        .map((p) => ({
+          x: p.bbox[0],
+          y: p.bbox[1],
+          w: p.bbox[2],
+          h: p.bbox[3],
+          score: p.score,
+        }));
       const best = people.reduce((m, p) => max(m, p.score), 0);
       topScore = lerp(topScore, best, SMOOTHING);
       state = nextState(state, topScore);
@@ -115,7 +150,7 @@ function nextState(current, s) {
 
 // ---------- Drawing ----------
 function draw() {
-  const u = min(width, height * 16 / 9) / 100;   // 1% of the largest 16:9 area that fits
+  const u = min(width, (height * 16) / 9) / 100; // 1% of the largest 16:9 area that fits
   const k = 1 - exp(-deltaTime / FADE_MS);
   const target = STATES[state].accent;
   accent = accent.map((c, i) => c + (target[i] - c) * k);
@@ -127,12 +162,18 @@ function draw() {
   const camW = video.elt.videoWidth || 640;
   const camH = video.elt.videoHeight || 480;
   let vh = height * 0.56;
-  let vw = vh * camW / camH;
+  let vw = (vh * camW) / camH;
   if (vw > width * 0.58) {
     vw = width * 0.58;
-    vh = vw * camH / camW;
+    vh = (vw * camH) / camW;
   }
-  view = { x: (width - vw) / 2, y: height * 0.215 + (height * 0.56 - vh) / 2, w: vw, h: vh, s: vw / camW };
+  view = {
+    x: (width - vw) / 2,
+    y: height * 0.215 + (height * 0.56 - vh) / 2,
+    w: vw,
+    h: vh,
+    s: vw / camW,
+  };
 
   drawVideo();
   if (state !== "LOADING") {
@@ -144,10 +185,22 @@ function draw() {
 
   // Heading
   const q = "Can you make the AI stop seeing you as human?";
-  type(q, width / 2, height * 0.07, { font: HEAD, weight: 300, size: fitType(q, 2.6 * u, width * 0.9, { font: HEAD, weight: 300 }), align: "center", color: "rgba(255,255,255,0.8)" });
+  type(q, width / 2, height * 0.07, {
+    font: HEAD,
+    weight: 300,
+    size: fitType(q, 2.6 * u, width * 0.9, { font: HEAD, weight: 300 }),
+    align: "center",
+    color: "rgba(255,255,255,0.8)",
+  });
   const label = STATES[state].label;
   const labelOpts = { font: HEAD, weight: 500, spacing: 0.6 * u };
-  type(label, width / 2, height * 0.145, { ...labelOpts, size: fitType(label, 4.4 * u, width * 0.9, labelOpts), align: "center", color: css(accent), glow: 2 * u });
+  type(label, width / 2, height * 0.145, {
+    ...labelOpts,
+    size: fitType(label, 4.4 * u, width * 0.9, labelOpts),
+    align: "center",
+    color: css(accent),
+    glow: 2 * u,
+  });
 
   drawStats(u);
   drawFigurePanel(u);
@@ -157,10 +210,17 @@ function draw() {
 function drawBackdrop() {
   background(...BG);
   const ctx = drawingContext;
-  const g = ctx.createRadialGradient(width / 2, height * 0.5, 0, width / 2, height * 0.5, max(width, height) * 0.7);
+  const g = ctx.createRadialGradient(
+    width / 2,
+    height * 0.5,
+    0,
+    width / 2,
+    height * 0.5,
+    max(width, height) * 0.7,
+  );
   g.addColorStop(0, css(accent, 0.14));
   g.addColorStop(1, css(accent, 0.05));
-  ctx.save();   // keeps p5's cached fill colour in sync with the canvas
+  ctx.save(); // keeps p5's cached fill colour in sync with the canvas
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
   ctx.restore();
@@ -199,7 +259,7 @@ function drawFrame(u) {
 // Faint horizontal line sweeping down the video with a short fading trail
 function drawScanLine(u) {
   const { x, y, w, h } = view;
-  const sy = y + (millis() % SCAN_MS) / SCAN_MS * h;
+  const sy = y + ((millis() % SCAN_MS) / SCAN_MS) * h;
   strokeWeight(1);
   for (let i = 0; i < 30; i++) {
     const ly = sy - i * 0.25 * u;
@@ -230,7 +290,12 @@ function drawPeople(u) {
     stroke(col);
     strokeWeight(max(1.5, 0.16 * u));
     noFill();
-    for (const [cx, cy, dx, dy] of [[x1, y1, 1, 1], [x1 + bw, y1, -1, 1], [x1, y1 + bh, 1, -1], [x1 + bw, y1 + bh, -1, -1]]) {
+    for (const [cx, cy, dx, dy] of [
+      [x1, y1, 1, 1],
+      [x1 + bw, y1, -1, 1],
+      [x1, y1 + bh, 1, -1],
+      [x1 + bw, y1 + bh, -1, -1],
+    ]) {
       line(cx, cy, cx + dx * len, cy);
       line(cx, cy, cx, cy + dy * len);
     }
@@ -240,7 +305,8 @@ function drawPeople(u) {
     const th = 2.4 * u;
     const tw = typeWidth(tag, opts) + 1.6 * u;
     // Above the box; if the box touches the top of the video, inside at the bottom so it doesn't cover the face
-    const ty = y1 - th - 0.6 * u >= view.y ? y1 - th - 0.6 * u : y1 + bh - th - 0.6 * u;
+    const ty =
+      y1 - th - 0.6 * u >= view.y ? y1 - th - 0.6 * u : y1 + bh - th - 0.6 * u;
     noStroke();
     fill(...BG, 180);
     rect(x1, ty, tw, th, th / 2);
@@ -251,7 +317,8 @@ function drawPeople(u) {
 // Thin skeleton with small rings on joints and crosshairs on the face
 function drawSkeleton(u) {
   const kp = {};
-  for (const k of keypoints) if (k.confidence >= KP_MIN) kp[k.name] = toScreen(k.x, k.y);
+  for (const k of keypoints)
+    if (k.confidence >= KP_MIN) kp[k.name] = toScreen(k.x, k.y);
   const col = [...accent, 180];
 
   stroke(...col);
@@ -261,8 +328,20 @@ function drawSkeleton(u) {
     if (kp[a] && kp[b]) line(...kp[a], ...kp[b]);
   }
   const r = 0.75 * u;
-  for (const name of ["left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist",
-    "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"]) {
+  for (const name of [
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+  ]) {
     if (kp[name]) circle(...kp[name], r);
   }
 
@@ -273,13 +352,19 @@ function drawSkeleton(u) {
     const [x, y] = kp[name];
     const a = 0.55 * u;
     const g = 0.18 * u;
-    line(x - a, y, x - g, y); line(x + g, y, x + a, y);
-    line(x, y - a, x, y - g); line(x, y + g, x, y + a);
+    line(x - a, y, x - g, y);
+    line(x + g, y, x + a, y);
+    line(x, y - a, x, y - g);
+    line(x, y + g, x, y + a);
   }
-  for (const name of ["left_ear", "right_ear"]) if (kp[name]) circle(...kp[name], r * 0.8);
+  for (const name of ["left_ear", "right_ear"])
+    if (kp[name]) circle(...kp[name], r * 0.8);
   if (kp.left_eye && kp.right_eye) {
     const eyeGap = dist(...kp.left_eye, ...kp.right_eye);
-    const [cx, cy] = kp.nose || [(kp.left_eye[0] + kp.right_eye[0]) / 2, (kp.left_eye[1] + kp.right_eye[1]) / 2];
+    const [cx, cy] = kp.nose || [
+      (kp.left_eye[0] + kp.right_eye[0]) / 2,
+      (kp.left_eye[1] + kp.right_eye[1]) / 2,
+    ];
     drawingContext.setLineDash([3, 4]);
     stroke(...accent, 110);
     ellipse(cx, cy - eyeGap * 0.2, eyeGap * 2.6, eyeGap * 3.3);
@@ -292,10 +377,15 @@ function drawStats(u) {
   const { x, y, w, h } = view;
   const gap = 5 * u;
   const colW = min(x - gap - 3 * u, 22 * u);
-  if (colW < 10 * u) return;   // window too narrow for side panels
+  if (colW < 10 * u) return; // window too narrow for side panels
   const cy = y + h / 2;
   const ready = state !== "LOADING";
-  const labelOpts = { size: 1.2 * u, weight: 400, spacing: 0.35 * u, color: "rgba(255,255,255,0.55)" };
+  const labelOpts = {
+    size: 1.2 * u,
+    weight: 400,
+    spacing: 0.35 * u,
+    color: "rgba(255,255,255,0.55)",
+  };
   const numOpts = { size: 8.5 * u, weight: 300, color: "#fff" };
 
   // Confidence
@@ -303,7 +393,12 @@ function drawStats(u) {
   type("HUMAN CONFIDENCE", lx, cy - 6.5 * u, labelOpts);
   const num = ready ? str(round(topScore * 100)) : "--";
   const nw = type(num, lx - 0.4 * u, cy, numOpts);
-  if (ready) type("%", lx + nw, cy + 1.5 * u, { ...numOpts, size: 3.4 * u, color: "rgba(255,255,255,0.6)" });
+  if (ready)
+    type("%", lx + nw, cy + 1.5 * u, {
+      ...numOpts,
+      size: 3.4 * u,
+      color: "rgba(255,255,255,0.6)",
+    });
 
   const by = cy + 6 * u;
   noStroke();
@@ -312,9 +407,21 @@ function drawStats(u) {
   fill(...accent);
   rect(lx, by, colW * constrain(ready ? shownScore : 0, 0, 1), 0.3 * u);
   fill(255, 90);
-  for (const t of [LOW, HIGH]) rect(lx + colW * t - 0.5, by - 0.6 * u, 1, 1.5 * u);
-  type("0", lx, by + 1.8 * u, { ...labelOpts, size: 1 * u, spacing: 0, color: "rgba(255,255,255,0.35)" });
-  type("100", lx + colW, by + 1.8 * u, { ...labelOpts, size: 1 * u, spacing: 0, align: "right", color: "rgba(255,255,255,0.35)" });
+  for (const t of [LOW, HIGH])
+    rect(lx + colW * t - 0.5, by - 0.6 * u, 1, 1.5 * u);
+  type("0", lx, by + 1.8 * u, {
+    ...labelOpts,
+    size: 1 * u,
+    spacing: 0,
+    color: "rgba(255,255,255,0.35)",
+  });
+  type("100", lx + colW, by + 1.8 * u, {
+    ...labelOpts,
+    size: 1 * u,
+    spacing: 0,
+    align: "right",
+    color: "rgba(255,255,255,0.35)",
+  });
 
   // Humans count
   const rx = x + w + gap;
@@ -339,7 +446,8 @@ function drawFigurePanel(u) {
   const seen = {};
   for (const k of keypoints) if (k.confidence >= KP_MIN) seen[k.name] = true;
   const lit = {};
-  for (const part of PARTS) lit[part.label] = state !== "LOADING" && part.names.some((n) => seen[n]);
+  for (const part of PARTS)
+    lit[part.label] = state !== "LOADING" && part.names.some((n) => seen[n]);
 
   const H = min(height * 0.135, 9 * u);
   const textOpts = { size: 1.3 * u, weight: 400, spacing: 0.3 * u };
@@ -443,12 +551,20 @@ function typeWidth(str, { font = MONO, size, weight = 400, spacing = 0 }) {
 // Shrinks a size so the string fits in maxW pixels
 function fitType(str, size, maxW, opts) {
   const w = typeWidth(str, { ...opts, size });
-  return w > maxW ? size * maxW / w : size;
+  return w > maxW ? (size * maxW) / w : size;
 }
 
 // Draws text and returns its width
 function type(str, x, y, opts) {
-  const { font = MONO, size, weight = 400, spacing = 0, align = "left", color = "#fff", glow = 0 } = opts;
+  const {
+    font = MONO,
+    size,
+    weight = 400,
+    spacing = 0,
+    align = "left",
+    color = "#fff",
+    glow = 0,
+  } = opts;
   const ctx = drawingContext;
   const w = typeWidth(str, opts);
   ctx.save();
